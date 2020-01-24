@@ -51,7 +51,6 @@ def get_advantages(values, masks, rewards):
         gae = delta + gamma*lambda_*masks[i]*gae
         returns.insert(0, gae+values[i])
     adv = np.array(returns - values[i-1])
-
     return returns, (adv - np.mean(adv))/(np.std(adv)+1e-10)
 
 def ppo_loss(oldpolicy_probs, advantages, rewards, values):
@@ -68,21 +67,16 @@ def ppo_loss(oldpolicy_probs, advantages, rewards, values):
         return total_loss
     return loss
 
-def ppo_continuous_loss(oldpolicy_probs, advantages, rewards, values):
-    def loss(y_true, y_pred):
-        prob = tf.keras.backend.sum(y_true * y_pred)
-        old_prob = tf.keras.backend.sum(y_true * oldpolicy_probs)
-        r = prob/(old_prob + 1e-10)
-        mean = tf.keras.backend.mean(tf.keras.backend.minimum(r * advantages, tf.clip_by_value(r, clip_value_min=0.8, clip_value_max=1.2) * advantages) + entropy_beta * -(prob * tf.math.log(prob + 1e-10)))
-        loss = -tf.math.log(prob + 1e-10) * mean
-        print(mean)
-        print(loss)
-        return loss
-        # return -tf.math.log(prob + 1e-10) * tf.keras.backend.mean(tf.keras.backend.minimum(r * advantages, tf.clip_by_value(r, clip_value_min=0.8, clip_value_max=1.2) * advantages) + entropy_beta * -(prob * tf.math.log(prob + 1e-10)))
-    return loss
+# def ppo_continuous_loss(oldpolicy_probs, advantages, rewards, values):
+#     def loss(y_true, y_pred):
+#         prob = tf.keras.backend.sum(y_true * y_pred)
+#         old_prob = tf.keras.backend.sum(y_true * oldpolicy_probs)
+#         r = prob/(old_prob + 1e-10)
+#         # return -tf.math.log(prob + 1e-10) * tf.keras.backend.mean(tf.keras.backend.minimum(r * advantages, tf.clip_by_value(r, clip_value_min=0.8, clip_value_max=1.2) * advantages) + entropy_beta * -(prob * tf.math.log(prob + 1e-10)))
+#     return loss
 
 def get_model_actor(input_dims, output_dims):
-    state_input = kl.Input(shape=input_dims) #(2,)
+    state_input = kl.Input(shape=input_dims)
 
     oldpolicy_probs = kl.Input(shape=(output_dims,))
     advantages = kl.Input(shape=(1,))
@@ -91,7 +85,7 @@ def get_model_actor(input_dims, output_dims):
 
     x = kl.Dense(512, kernel_initializer='random_uniform', activation='tanh', name='fc0')(state_input)
     x = kl.Dense(256, kernel_initializer='random_uniform', activation='tanh', name='fc1')(x)
-    out_actions = kl.Dense(n_actions, activation='linear', name='predictions')(x)
+    out_actions = kl.Dense(output_dims, activation='linear', name='predictions')(x)
 
     model = Model(inputs=[state_input, oldpolicy_probs, advantages, rewards, values], outputs=[out_actions])
     model.compile(optimizer=Adam(lr=1e-4), loss='mse')
@@ -110,24 +104,30 @@ def get_model_critic(input_dims):
     model.compile(optimizer=Adam(lr=1e-4), loss='mse')
     return model
 
+def sample_action(env, mu, sigma):
+    noise = np.random.normal(mu,3,1)
+    action = np.random.normal(mu, sigma) + noise
+    print(action)
+    action = np.clip(action, env.action_space.low[0], env.action_space.high[0])
+    print(action)
+    return np.array(action).reshape(1,)
+
 if __name__ == '__main__':
-    ppo_steps = 15
+    ppo_steps = 1000
 
 
     env = gym.make('MountainCarContinuous-v0')
     state = env.reset()
-    print('state')
-    print(state)
     state_dims = env.observation_space.shape
-    n_actions = int(env.action_space.shape[0]) #For Car Box
-    # n_actions = env.action_space
+    # n_actions = int(env.action_space.shape[0]) #For Car Box Discontinuous
+    n_actions = 2 #For Car Box Continuous Mu Sigma
 
     model_actor = get_model_actor(input_dims=state_dims, output_dims=n_actions)
     model_critic = get_model_critic(input_dims=state_dims)
 
-    print(state_dims)
+    model_actor.summary()
 
-    dummy_n = np.zeros((n_actions))
+    dummy_n = tf.reshape(np.zeros((n_actions)), [-1, 2])
     dummy_1 = np.zeros((1))
 
     best_reward = 0
@@ -140,8 +140,8 @@ if __name__ == '__main__':
         state = env.reset()
         states = []
         actions = []
-        # actions_onehot = []
-        # actions_probs = []
+        actions_deter = []
+        actions_probs = []
         values = []
         masks = []
         rewards = []
@@ -150,38 +150,34 @@ if __name__ == '__main__':
 
         for itr in range(ppo_steps):
             observation = env.render()
-            print('Observation')
-            print(observation)
-            noise = np.random.normal(0,2,1)
-            print('Noise')
-            print(noise)
-            # action = 100
-            action = env.action_space.sample() + noise
+            # noise = np.random.normal(0,2,1)
+            # print('Noise')
+            # print(noise)
+            action = env.action_space.sample()
 
-            print(action)
+            state_imput = tf.reshape(state, [-1, 2])
 
-            state_imput = tf.expand_dims(state, 0)
-            action = model_actor.predict([state_imput, dummy_n, dummy_1, dummy_1, dummy_1], steps = 1).reshape(1,) + noise
+            action_dist = model_actor.predict([state_imput, dummy_n, dummy_1, dummy_1, dummy_1], steps = 1)
+            mu = action_dist[0][0]
+            sigma = abs(action_dist[0][1])
+
+            action = sample_action(env, mu, sigma)
             q_value = model_critic.predict(state_imput, steps = 1)
 
-            print('')
-            print('Action')
-            print(action)
-            print('q_value')
-            print(q_value)
-
             observation, reward, done, info = env.step(action)
-            print('datos obtenidos del env')
-            print(observation, reward, done, info )
+            print('itr: ' + str(itr) + ', action=' + str(action) + ', reward=' + str(reward) + ', q val=' + str(q_value))
             mask = not done
+
+            action_deter = np.zeros(n_actions)
+            action_deter[0] = mu
 
             states.append(state)
             actions.append(action)
-            # actions_onehot.append(action_onehot)
+            actions_deter.append(action_deter)
             values.append(q_value)
             masks.append(mask)
             rewards.append(reward)
-            # actions_probs.append(action_dist)
+            actions_probs.append(action_dist)
 
             state = observation
             if done:
@@ -203,36 +199,40 @@ if __name__ == '__main__':
         # print(len(states))
         # print(states)
 
-        print('actions')
-        print(len(actions))
-        print(actions)
 
-        print('advantages')
-        print(advantages.reshape(-1,1).shape)
-        print(advantages.reshape(-1,1))
 
-        print('rewards')
-        print(len(rewards))
-        print(rewards)
 
-        print('masks')
-        print(len(masks))
-        print(masks)
 
-        print('values')
-        print(len(np.reshape(values[:-1], newshape = (-1, n_actions))))
-        print(np.reshape(values[:-1], newshape = (-1, n_actions)))
-        print(n_actions)
 
-        input('Waiting for check')
+
+
+        # print('advantages')
+        # print(advantages.reshape(-1,1).shape)
+        # print(advantages.reshape(-1,1))
+
+        # print('rewards')
+        # print(len(rewards))
+        # print(rewards)
+
+        # print('masks')
+        # print(len(masks))
+        # print(masks)
+
+        # print('values')
+        # print(len(np.reshape(values[:-1], newshape = (-1, 1))))
+        # print(np.reshape(values[:-1], newshape = (-1, 1)))
+        # print(values[:-1])
+        # print(n_actions)
+
+        # input('Waiting for check')
         print('Fitting Models')
         model_actor.fit(
-            [states, actions, advantages.reshape(-1,1), rewards, np.reshape(values[:-1], newshape = (-1, n_actions))],
-            [np.reshape(actions, newshape = (-1, n_actions))],verbose=True, shuffle=True, epochs=8)
+            [states, tf.reshape(actions_probs, [-1, 2]), advantages.reshape(-1,1), rewards, np.reshape(values[:-1], newshape = (-1, 1))],
+            [tf.reshape(actions_deter, [-1, 2])],verbose=True, shuffle=True, epochs=8)
         model_critic.fit(
             [states], 
             [np.reshape(returns, newshape = (-1, 1))],verbose=True, shuffle=True, epochs=8)
-        input('Waiting for check')
+        # input('Waiting for check')
 
         # avg_reward = np.mean([test_reward() for _ in range(5) ])
         # print('Total test reward {}'.format(avg_reward))
@@ -240,5 +240,3 @@ if __name__ == '__main__':
         #     print('Best reward {}'.format(best_reward))
 
     env.close()
-
-    
