@@ -11,12 +11,19 @@ import scipy.stats
 
 import matplotlib.pyplot as plt
 import tensorflow as tf
+
 from tensorflow.keras import Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.applications import MobileNetV2
 
 import tensorflow.keras.layers as kl
 import numpy as np
+import sys
+
+import tensorflow_probability as tfp
+tfd = tfp.distributions
+tf.compat.v1.disable_eager_execution()
+
 print(tf.__version__)
 
 gamma = 0.99
@@ -59,39 +66,41 @@ def ppo_loss(oldpolicy_probs, advantages, rewards, values):
     def loss(y_true, y_pred):
         newpolicy_probs = y_pred
 
-        loss_adv = oldpolicy_probs[0,0]
+        newpolicy_means = newpolicy_probs[0,0]
+        newpolicy_sigmas = abs(newpolicy_probs[0,1])
 
-        loss_adv = tf.print(loss_adv, [loss_adv], 'loss_adv: ')
-
-        # newpolicy_means = newpolicy_probs[0,0]
-        # newpolicy_sigmas = abs(newpolicy_probs[0,1])
         oldpolicy_means = oldpolicy_probs[0,0]
-        # oldpolicy_sigmas = oldpolicy_probs[0,1]
+        oldpolicy_sigmas = abs(oldpolicy_probs[0,1])
 
-        # actions_min = -2
-        # actions_max = 2
-        # actions_range = np.linspace(actions_min, actions_max, 100)
-        # newpolicy_probs = scipy.stats.norm.pdf(actions_range,newpolicy_means,newpolicy_sigmas)
-        oldpolicy_probs = scipy.stats.norm.pdf(actions_range,oldpolicy_means,oldpolicy_sigmas)
+        actions_dist_min = -2
+        actions_dist_max = 2
+        # actions_dist_max = tf.print(actions_dist_max, [actions_dist_max], "Inside loss function")
+
+        action_linspace = tf.linspace(tf.constant(actions_dist_min,dtype=tf.float32), 
+                                      tf.constant(actions_dist_max,dtype=tf.float32), 20, name="action_linspace")
+        newpolicy_dist_norm = tfd.Normal(loc=newpolicy_means, scale=newpolicy_sigmas)
+        oldpolicy_dist_norm = tfd.Normal(loc=oldpolicy_means, scale=oldpolicy_sigmas)
+        newpolicy_dist = newpolicy_dist_norm.prob(action_linspace)
+        oldpolicy_dist = oldpolicy_dist_norm.prob(action_linspace)
 
 
-
-        ratio = tf.math.exp(tf.math.log(newpolicy_probs+1e-10)-tf.math.log(oldpolicy_probs+1e-10))
+        ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
         p1 = ratio*advantages
         p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*advantages
         actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
         critic_loss = tf.keras.backend.mean(tf.keras.backend.square(rewards - values))
         total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
-            -(newpolicy_probs*tf.math.log(newpolicy_probs + 1e-10))
+            -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
         )
         return total_loss
     return loss
 
 # def ppo_loss_ind(oldpolicy_probs, advantages, rewards, values):
 #     # newpolicy_probs = y_pred
-#     dummy_n_l = tf.reshape(np.zeros((ppo_steps,n_actions)), [-1, 2])
+#     total_loss = 0
+#     dummy_n_l = np.zeros((ppo_steps,n_actions)).reshape(-1, 2)
 #     dummy_1_l = np.zeros((ppo_steps,1))
-#     newpolicy_probs = model_actor.predict([states, dummy_n_l, dummy_1_l, dummy_1_l, dummy_1_l])
+#     newpolicy_probs = model_actor.predict([np_states, dummy_n_l, dummy_1_l, dummy_1_l, dummy_1_l])
 #     print('newpolicy_probs Norm')
 #     print(newpolicy_probs)
 #     print('oldpolicy_probs Norm')
@@ -109,34 +118,47 @@ def ppo_loss(oldpolicy_probs, advantages, rewards, values):
 #     print('---------------------')
 #     print('---------------------')
 #     print('---------------------')
-#     actions_min = -2
-#     actions_max = 2
-#     actions_range = np.linspace(actions_min, actions_max, 100)
-#     newpolicy_probs = scipy.stats.norm.pdf(actions_range,newpolicy_means,newpolicy_sigmas)
-#     print('newpolicy_probs')
-#     print(newpolicy_probs)
-#     oldpolicy_probs = scipy.stats.norm.pdf(actions_range,oldpolicy_means,oldpolicy_sigmas)
-#     print('oldpolicy_probs')
-#     print(oldpolicy_probs)
-#     print('---------------------')
-#     print('---------------------')
-#     print('LOG newpolicy_probs')
-#     print(tf.math.log(newpolicy_probs+1e-10))
-#     print('LOG oldpolicy_probs')
-#     print(tf.math.log(oldpolicy_probs+1e-10))
 
-#     ratio = tf.math.exp(tf.math.log(newpolicy_probs+1e-10)-tf.math.log(oldpolicy_probs+1e-10))
-#     print(ratio)
-#     print(advantages)
+#     actions_dist_min = -2
+#     actions_dist_max = 2
+
+#     action_linspace = tf.linspace(tf.constant(actions_dist_min,dtype=tf.float32), 
+#                                     tf.constant(actions_dist_max,dtype=tf.float32), 100, name="action_linspace")
+#     newpolicy_dist_norm = tfd.Normal(loc=newpolicy_means, scale=newpolicy_sigmas)
+#     oldpolicy_dist_norm = tfd.Normal(loc=oldpolicy_means, scale=oldpolicy_sigmas)
+#     newpolicy_dist = newpolicy_dist_norm.prob(action_linspace)
+#     oldpolicy_dist = oldpolicy_dist_norm.prob(action_linspace)
+    
+    
+
+#     ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
 #     p1 = ratio*advantages
-#     print(p1)
 #     p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*advantages
+    
 #     actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
 #     critic_loss = tf.keras.backend.mean(tf.keras.backend.square(rewards - values))
 #     total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
 #         -(newpolicy_probs*tf.math.log(newpolicy_probs + 1e-10))
 #     )
 #     print(total_loss)
+#     with tf.compat.v1.Session() as sess:  
+#         print(newpolicy_dist.eval())
+#         print(oldpolicy_dist.eval())
+#         print('---------------------')
+#         print('---------------------')
+#         print('---------------------')
+#         print(ratio.eval())
+#         print(advantages)
+#         print(p1.eval())
+#         print(p2.eval())
+#         print('---------------------')
+#         print('---------------------')
+#         print('---------------------') 
+#         print(actor_loss.eval())
+#         print(critic_loss.eval())
+#         print('---------------------')
+#         print('---------------------')
+#         print('---------------------') 
 #     return total_loss
 
 def get_model_actor(input_dims, output_dims):
@@ -152,7 +174,6 @@ def get_model_actor(input_dims, output_dims):
     out_actions = kl.Dense(output_dims, activation='linear', name='predictions')(x)
 
     model = Model(inputs=[state_input, oldpolicy_probs, advantages, rewards, values], outputs=[out_actions])
-    # model.compile(optimizer=Adam(lr=1e-4), loss='mse')
     model.compile(optimizer=Adam(lr=1e-4), loss=[ppo_loss(oldpolicy_probs=oldpolicy_probs, advantages=advantages,
                                                           rewards=rewards, values=values)])
     return model
@@ -171,29 +192,33 @@ def get_model_critic(input_dims):
 def sample_action(env, mu, sigma):
     noise = np.random.normal(0,1,1)
     action = np.random.normal(mu, sigma) + noise
-    print(action)
     action = np.clip(action, env.action_space.low[0], env.action_space.high[0])
-    print(action)
     return np.array(action).reshape(1,)
 
 if __name__ == '__main__':
-    x_min = -2
-    x_max = 2
 
-    mean = 0.8
-    std = 1
+    # x_min = -2
+    # x_max = 2
 
-    x = np.linspace(x_min, x_max, 100)
-    y = scipy.stats.norm.pdf(x,mean,std)
+    # mean = 0.8
+    # std = 1
 
-    mean = -0.2
-    std = 1e-2
+    # sample = tf.constant([0.8, 1])
+    # action_linspace = tf.linspace( tf.constant(x_min,dtype=tf.float32), tf.constant(x_max,dtype=tf.float32), 100, name="action_linspace")
+    # dist_norm = tfd.Normal(loc=sample[0], scale=sample[1])
+    # policy_dist = dist_norm.prob(action_linspace)
+    # print(policy_dist)
 
-    z = scipy.stats.norm.pdf(x,mean,std)
-    print(z)
 
-    k = tf.math.log(z)
-    print(k)
+    # x = np.linspace(x_min, x_max, 100)
+    # y = scipy.stats.norm.pdf(x,mean,std)
+    # print(y)
+    # input('')
+    
+
+
+    # k = tf.math.log(z)
+    # print(k)
 
     # plt.plot(x,y, color='coral')
     # plt.plot(x,z, color='red')
@@ -210,7 +235,7 @@ if __name__ == '__main__':
 
     # input('holis')
 
-    ppo_steps = 1
+    ppo_steps = 200
 
     env = gym.make('MountainCarContinuous-v0')
     state = env.reset()
@@ -251,7 +276,6 @@ if __name__ == '__main__':
             action_dist = model_actor.predict([state_imput, dummy_n, dummy_1, dummy_1, dummy_1], steps = 1)
             mu = action_dist[0][0]
             sigma = abs(action_dist[0][1])
-            # action_dist[0][1] = abs(action_dist[0][1])
 
             action = sample_action(env, mu, sigma)
             q_value = model_critic.predict(state_imput, steps = 1)
@@ -280,39 +304,44 @@ if __name__ == '__main__':
 
         returns, advantages = get_advantages(values, masks, rewards)
 
-
-
-        # print('advantages')
-        # print(advantages.reshape(-1,1).shape)
-        # print(advantages.reshape(-1,1))
-
-        # print('rewards')
-        # print(len(rewards))
-        # print(rewards)
-
-        # print('masks')
-        # print(len(masks))
-        # print(masks)
-
-        # print('values')
-        # print(len(np.reshape(values[:-1], newshape = (-1, 1))))
-        # print(np.reshape(values[:-1], newshape = (-1, 1)))
-        # print(values[:-1])
-        # print(n_actions)
-
-        # input('Waiting for check')
         print('Fitting Models')
-        # ppo_loss_ind(tf.reshape(actions_probs, [-1, 2]), advantages.reshape(-1,1), rewards, np.reshape(values[:-1], newshape = (-1, 1)))
-        # input('Waiting for check')
+        
 
+        np_states = np.asarray(states)
+        np_actions_probs = np.asarray(actions_probs).reshape(-1,2)
+        np_advantages = advantages.reshape(-1,1)
+        np_rewards = np.asarray(rewards)
+        np_values = np.asarray(values[:-1]).reshape(-1, 1)
+        np_actions_deter = np.asarray(actions_deter).reshape(-1,2)
+        np_returns = np.asarray(returns).reshape(-1,1)
+
+        print(type(np_states))
+        print(np_states.shape)
+        print(type(np_actions_probs))
+        print(np_actions_probs.shape)
+        print(type(np_advantages))
+        print(np_advantages.shape)
+        print(type(np_rewards))
+        print(np_rewards.shape)
+        print(type(np_values))
+        print(np_values.shape)
+        print(type(np_actions_deter))
+        print(np_actions_deter.shape)
+        print(type(np_returns))
+        print(np_returns.shape)
+
+        # ppo_loss_ind(np_actions_probs, np_advantages, np_rewards, np_values)
+        # input('Waiting for check')
         input('Waiting for check')
 
         model_actor.fit(
-            [states, tf.reshape(actions_probs, [-1, 2]), advantages.reshape(-1,1), rewards, np.reshape(values[:-1], newshape = (-1, 1))],
-            [tf.reshape(actions_deter, [-1, 2])],verbose=True, shuffle=True, epochs=8)
+            [np_states, np_actions_probs, np_advantages, np_rewards, np_values],
+            [np_actions_deter],verbose=True, shuffle=True, epochs=8)
+            # [states, tf.reshape(actions_probs, [-1, 2]), advantages.reshape(-1,1), rewards, np.reshape(values[:-1], newshape = (-1, 1))],
+            # [actions_deter.reshape(-1,2)],verbose=True, shuffle=True, epochs=8)
         model_critic.fit(
-            [states], 
-            [np.reshape(returns, newshape = (-1, 1))],verbose=True, shuffle=True, epochs=8)
+            [np_states], 
+            [np_returns],verbose=True, shuffle=True, epochs=8)
         input('Waiting for check')
 
         # avg_reward = np.mean([test_reward() for _ in range(5) ])
