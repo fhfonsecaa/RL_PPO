@@ -32,6 +32,8 @@ clipping_val = 0.2
 critic_discount = 0.5
 entropy_beta = 0.001
 
+env = gym.make('MountainCarContinuous-v0')
+
 def test_reward():
     state = env.reset()
     done = False
@@ -62,7 +64,13 @@ def get_advantages(values, masks, rewards):
     adv = np.array(returns - values[i-1])
     return returns, (adv - np.mean(adv))/(np.std(adv)+1e-10)
 
-def ppo_loss(oldpolicy_probs, advantages, rewards, values):
+def sample_action(env, mu, sigma):
+    noise = np.random.normal(0,1,1)
+    action = np.random.normal(mu, sigma) + noise
+    action = np.clip(action, env.action_space.low[0], env.action_space.high[0])
+    return np.array(action).reshape(1,)
+
+def ppo_loss(oldpolicy_probs, actions, advantages, rewards, values):
     def loss(y_true, y_pred):
         newpolicy_probs = y_pred
 
@@ -71,28 +79,26 @@ def ppo_loss(oldpolicy_probs, advantages, rewards, values):
 
         oldpolicy_means = oldpolicy_probs[0,0]
         oldpolicy_sigmas = abs(oldpolicy_probs[0,1])
+        oldactions = actions
 
-        actions_dist_min = -2
-        actions_dist_max = 2
-        # actions_dist_max = tf.print(actions_dist_max, [actions_dist_max], "Inside loss function")
-
-        action_linspace = tf.linspace(tf.constant(actions_dist_min,dtype=tf.float32), 
-                                      tf.constant(actions_dist_max,dtype=tf.float32), 20, name="action_linspace")
         newpolicy_dist_norm = tfd.Normal(loc=newpolicy_means, scale=newpolicy_sigmas)
         oldpolicy_dist_norm = tfd.Normal(loc=oldpolicy_means, scale=oldpolicy_sigmas)
-        newpolicy_dist = newpolicy_dist_norm.prob(action_linspace)
-        oldpolicy_dist = oldpolicy_dist_norm.prob(action_linspace)
+        newactions = newpolicy_dist_norm.sample()
+
+        newpolicy_prob = newpolicy_dist_norm.prob(newactions)
+        oldpolicy_prob = oldpolicy_dist_norm.prob(oldactions)
 
 
-        ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
+        ratio = tf.math.exp(tf.math.log(newpolicy_prob+1e-10)-tf.math.log(oldpolicy_prob+1e-10))
         p1 = ratio*advantages
         p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*advantages
         actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
         critic_loss = tf.keras.backend.mean(tf.keras.backend.square(rewards - values))
         total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
-            -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
+            -(newpolicy_prob*tf.math.log(newpolicy_prob + 1e-10))
         )
         return total_loss
+        # return 0.2
     return loss
 
 # def ppo_loss_ind(oldpolicy_probs, advantages, rewards, values):
@@ -165,6 +171,7 @@ def get_model_actor(input_dims, output_dims):
     state_input = kl.Input(shape=input_dims)
 
     oldpolicy_probs = kl.Input(shape=(output_dims,))
+    actions = kl.Input(shape=(1,))
     advantages = kl.Input(shape=(1,))
     rewards = kl.Input(shape=(1,))
     values = kl.Input(shape=(1,))
@@ -173,8 +180,8 @@ def get_model_actor(input_dims, output_dims):
     x = kl.Dense(256, kernel_initializer='random_uniform', activation='tanh', name='fc1')(x)
     out_actions = kl.Dense(output_dims, activation='linear', name='predictions')(x)
 
-    model = Model(inputs=[state_input, oldpolicy_probs, advantages, rewards, values], outputs=[out_actions])
-    model.compile(optimizer=Adam(lr=1e-4), loss=[ppo_loss(oldpolicy_probs=oldpolicy_probs, advantages=advantages,
+    model = Model(inputs=[state_input, oldpolicy_probs, actions, advantages, rewards, values], outputs=[out_actions])
+    model.compile(optimizer=Adam(lr=1e-4), loss=[ppo_loss(oldpolicy_probs=oldpolicy_probs, actions=actions, advantages=advantages,
                                                           rewards=rewards, values=values)])
     return model
 
@@ -189,11 +196,7 @@ def get_model_critic(input_dims):
     model.compile(optimizer=Adam(lr=1e-4), loss='mse')
     return model
 
-def sample_action(env, mu, sigma):
-    noise = np.random.normal(0,1,1)
-    action = np.random.normal(mu, sigma) + noise
-    action = np.clip(action, env.action_space.low[0], env.action_space.high[0])
-    return np.array(action).reshape(1,)
+
 
 if __name__ == '__main__':
 
@@ -235,9 +238,9 @@ if __name__ == '__main__':
 
     # input('holis')
 
-    ppo_steps = 200
+    ppo_steps = 300
 
-    env = gym.make('MountainCarContinuous-v0')
+    
     state = env.reset()
     state_dims = env.observation_space.shape
     n_actions = 2 #For Car Box Continuous Mu Sigma
@@ -273,7 +276,7 @@ if __name__ == '__main__':
 
             state_imput = tf.reshape(state, [-1, 2])
 
-            action_dist = model_actor.predict([state_imput, dummy_n, dummy_1, dummy_1, dummy_1], steps = 1)
+            action_dist = model_actor.predict([state_imput, dummy_n, dummy_1, dummy_1, dummy_1, dummy_1], steps = 1)
             mu = action_dist[0][0]
             sigma = abs(action_dist[0][1])
 
@@ -284,12 +287,10 @@ if __name__ == '__main__':
             print('itr: ' + str(itr) + ', action=' + str(action) + ', reward=' + str(reward) + ', q val=' + str(q_value))
             mask = not done
 
-            action_deter = np.zeros(n_actions)
-            action_deter[0] = mu
 
             states.append(state)
             actions.append(action)
-            actions_deter.append(action_deter)
+            actions_deter.append(action_dist)
             values.append(q_value)
             masks.append(mask)
             rewards.append(reward)
@@ -309,33 +310,36 @@ if __name__ == '__main__':
 
         np_states = np.asarray(states)
         np_actions_probs = np.asarray(actions_probs).reshape(-1,2)
+        np_actions = np.asarray(actions)
         np_advantages = advantages.reshape(-1,1)
         np_rewards = np.asarray(rewards)
         np_values = np.asarray(values[:-1]).reshape(-1, 1)
         np_actions_deter = np.asarray(actions_deter).reshape(-1,2)
         np_returns = np.asarray(returns).reshape(-1,1)
 
-        print(type(np_states))
-        print(np_states.shape)
-        print(type(np_actions_probs))
-        print(np_actions_probs.shape)
-        print(type(np_advantages))
-        print(np_advantages.shape)
-        print(type(np_rewards))
-        print(np_rewards.shape)
-        print(type(np_values))
-        print(np_values.shape)
-        print(type(np_actions_deter))
-        print(np_actions_deter.shape)
-        print(type(np_returns))
-        print(np_returns.shape)
+        # print(type(np_states))
+        # print(np_states.shape)
+        # print(type(np_actions_probs))
+        # print(np_actions_probs.shape)
+        # print(type(np_actions))
+        # print(np_actions.shape)
+        # print(type(np_advantages))
+        # print(np_advantages.shape)
+        # print(type(np_rewards))
+        # print(np_rewards.shape)
+        # print(type(np_values))
+        # print(np_values.shape)
+        # print(type(np_actions_deter))
+        # print(np_actions_deter.shape)
+        # print(type(np_returns))
+        # print(np_returns.shape)
 
         # ppo_loss_ind(np_actions_probs, np_advantages, np_rewards, np_values)
-        # input('Waiting for check')
         input('Waiting for check')
+        # input('Waiting for check')
 
         model_actor.fit(
-            [np_states, np_actions_probs, np_advantages, np_rewards, np_values],
+            [np_states, np_actions_probs, np_actions, np_advantages, np_rewards, np_values],
             [np_actions_deter],verbose=True, shuffle=True, epochs=8)
             # [states, tf.reshape(actions_probs, [-1, 2]), advantages.reshape(-1,1), rewards, np.reshape(values[:-1], newshape = (-1, 1))],
             # [actions_deter.reshape(-1,2)],verbose=True, shuffle=True, epochs=8)
