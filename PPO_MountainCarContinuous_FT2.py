@@ -27,12 +27,51 @@ tfd = tfp.distributions
 # tf.config.experimental_run_functions_eagerly(True)
 
 print(tf.__version__)
-
+print(gym.__version__)
 gamma = 0.99
 lambda_ = 0.95
 clipping_val = 0.2
 critic_discount = 0.5
 entropy_beta = 0.001
+
+class WeightedSDRLoss(tf.tf.keras.losses.Loss):
+    def __init__(self, oldpolicy_probs, advantages, rewards, values, name='WeightedSDRLoss'):
+        super().__init__(name=name)
+        self.oldpolicy_probs = oldpolicy_probs
+        self.advantages = advantages
+        self.rewards = rewards
+        self.values = values
+
+    def call(self, y_true, y_pred):
+        newpolicy_probs = y_pred
+
+        newpolicy_means = newpolicy_probs[0,0]
+        newpolicy_sigmas = abs(newpolicy_probs[0,1])
+
+        oldpolicy_means = self.oldpolicy_probs[0,0]
+        oldpolicy_sigmas = abs(self.oldpolicy_probs[0,1])
+
+        actions_dist_min = -2
+        actions_dist_max = 2
+
+        action_linspace = tf.linspace(tf.constant(actions_dist_min,dtype=tf.float32), 
+                                      tf.constant(actions_dist_max,dtype=tf.float32), 20, name="action_linspace")
+        newpolicy_dist_norm = tfd.Normal(loc=newpolicy_means, scale=newpolicy_sigmas)
+        oldpolicy_dist_norm = tfd.Normal(loc=oldpolicy_means, scale=oldpolicy_sigmas)
+        newpolicy_dist = newpolicy_dist_norm.prob(action_linspace)
+        oldpolicy_dist = oldpolicy_dist_norm.prob(action_linspace)
+
+
+        ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
+        p1 = ratio*self.advantages
+        p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*self.advantages
+        actor_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.minimum(p1,p2))
+        critic_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.square(self.rewards - self.values))
+        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.tf.keras.backend.mean(
+            -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
+        )
+        return total_loss
+
 
 def test_reward():
     state = env.reset()
@@ -87,48 +126,16 @@ def ppo_loss(oldpolicy_probs, advantages, rewards, values):
         ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
         p1 = ratio*advantages
         p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*advantages
-        actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
-        critic_loss = tf.keras.backend.mean(tf.keras.backend.square(rewards - values))
-        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
+        actor_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.minimum(p1,p2))
+        critic_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.square(rewards - values))
+        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.tf.keras.backend.mean(
             -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
         )
         return total_loss
     return loss
 
-# @tf.function
-# def ppo_loss(y_true, y_pred):
-#     newpolicy_probs = y_pred
-
-#     newpolicy_means = newpolicy_probs[0,0]
-#     newpolicy_sigmas = abs(newpolicy_probs[0,1])
-
-#     oldpolicy_means = oldpolicy_probs[0,0]
-#     oldpolicy_sigmas = abs(oldpolicy_probs[0,1])
-
-#     actions_dist_min = -2
-#     actions_dist_max = 2
-
-#     action_linspace = tf.linspace(tf.constant(actions_dist_min,dtype=tf.float32), 
-#                                     tf.constant(actions_dist_max,dtype=tf.float32), 20, name="action_linspace")
-#     newpolicy_dist_norm = tfd.Normal(loc=newpolicy_means, scale=newpolicy_sigmas)
-#     oldpolicy_dist_norm = tfd.Normal(loc=oldpolicy_means, scale=oldpolicy_sigmas)
-#     newpolicy_dist = newpolicy_dist_norm.prob(action_linspace)
-#     oldpolicy_dist = oldpolicy_dist_norm.prob(action_linspace)
-
-
-#     ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
-#     p1 = ratio*advantages
-#     p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*advantages
-#     actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
-#     critic_loss = tf.keras.backend.mean(tf.keras.backend.square(rewards - values))
-#     total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
-#         -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
-#     )
-#     return total_loss
-
 def get_model_actor(input_dims, output_dims):
     state_input = kl.Input(shape=input_dims)
-    dummy_n = np.zeros((n_actions)).reshape(-1, 2)
 
     oldpolicy_probs = kl.Input(shape=(output_dims,))
     advantages = kl.Input(shape=(1,))
@@ -140,9 +147,10 @@ def get_model_actor(input_dims, output_dims):
     out_actions = kl.Dense(output_dims, activation='linear', name='predictions')(x)
 
     model = Model(inputs=[state_input, oldpolicy_probs, advantages, rewards, values], outputs=[out_actions])
-    # model.add_loss(ppo_loss)
-    model.compile(optimizer=Adam(lr=1e-4),loss=[ppo_loss(oldpolicy_probs=oldpolicy_probs, advantages=advantages,
-                                                          rewards=rewards, values=values)])
+    # holis = WeightedSDRLoss(oldpolicy_probs=oldpolicy_probs, advantages=advantages, rewards=rewards, values=values)
+    # model.compile(optimizer=Adam(lr=1e-4),loss=holis)
+    model.compile(optimizer=Adam(lr=1e-4),loss=ppo_loss(oldpolicy_probs=oldpolicy_probs, advantages=advantages, rewards=rewards, values=values))
+
     return model
 
 def get_model_critic(input_dims):
