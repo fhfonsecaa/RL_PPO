@@ -139,24 +139,23 @@ class Agent:
     def update_ppo(self):        
         batch_size = int(self.buffer.length() / self.minibatch)
         
-        # Optimize policy for K epochs:
+        # Optimize policy using K epochs:
         for _ in range(self.ppo_epochs):       
             for states, actions, rewards, dones, next_states in self.buffer.get_all().batch(batch_size):
                 self.train_ppo(states, actions, rewards, dones, next_states)
                     
-        # Clear the memory
         self.buffer.clean_buffer()
                 
         # Copy new weights into old policy:
         self.actor_old_model.set_weights(self.actor_model.get_weights())
         self.critic_old_model.set_weights(self.critic_model.get_weights())
 
-    def save_weights(self):
+    def save_weights(self,episode,identifier):
         env_name = self.env.unwrapped.spec.id
         if os.path.exists(env_name) is False:
             os.mkdir(env_name)
 
-        self.actor_model.save_weights(env_name+'/actor.hd5')
-        self.actor_old_model.save_weights(env_name+'/actor_old.hd5')
-        self.critic_model.save_weights(env_name+'/critic.hd5')
-        self.critic_old_model.save_weights(env_name+'/critic_old.hd5')
+        self.actor_model.save_weights(env_name+'/actor_'+str(episode)+identifier+'.hd5')
+        self.actor_old_model.save_weights(env_name+'/actor_old_'+str(episode)+identifier+'.hd5')
+        self.critic_model.save_weights(env_name+'/critic_'+str(episode)+identifier+'.hd5')
+        self.critic_old_model.save_weights(env_name+'/critic_old_'+str(episode)+identifier+'.hd5')

@@ -38,6 +38,7 @@ def plot(datas, marker, title, y_label, id):
     print('Max '+y_label+':', np.max(datas))
     print('Min '+y_label+':', np.min(datas))
     print('Avg '+y_label+':', np.mean(datas))
+    print('')
 
 def run_episode(env, agent, state_dim, render, training_mode, t_updates, n_update):
     state = env.reset()     
@@ -112,7 +113,6 @@ def run_episode_humanoid(env, agent, state_dim, render, training_mode, t_updates
     
 def main():
 
-    # load_weights = True # If you want to load the agent, set this to True
     save_weights = False # If you want to save the agent, set this to True
     training_mode = True # If you want to train the agent, set this to True. But set this otherwise if you only want to test it
     reward_threshold = None # Set threshold for reward. The learning will stop if reward has pass threshold. Set none to sei this off
@@ -120,7 +120,7 @@ def main():
     render = True # If you want to display the image.
     update_threshold = 2048 # How many episode before you update the Policy
     plot_batch_threshold = 100 # How many episode you want to plot the result
-    episode_max = 10000 # How many episode you want to run
+    episode_max = 10000 # How many episodes to run
 
     if mujoco:
         env_name = "Humanoid-v2"
@@ -148,47 +148,55 @@ def main():
     updates_counter = 0
     
     for i_episode in range(1, episode_max + 1):
-        total_reward, time, updates_counter = run_episode(env, agent, state_dim, render, training_mode, updates_counter, update_threshold)
-        print('Episode {} \t t_reward: {} \t time: {} \t epsilon: {} \t'.format(i_episode, int(total_reward), time, agent.get_epsilon()))
-        batch_rewards.append(int(total_reward))
-        batch_times.append(time)   
-        epsilon -= 4.0e-4
-        if epsilon >= 0.2:
-            agent.set_epsilon(epsilon)
-        if save_weights:
-            agent.save_weights()  
-                            
-        if reward_threshold:
-            if len(batch_solved_reward) == 100:            
-                if np.mean(batch_solved_reward) >= reward_threshold :              
-                    for reward in batch_rewards:
-                        rewards.append(reward)
+        try:
+            total_reward, time, updates_counter = run_episode(env, agent, state_dim, render, training_mode, updates_counter, update_threshold)
+            print('Episode {} \t t_reward: {} \t time: {} \t epsilon: {} \t'.format(i_episode, int(total_reward), time, agent.get_epsilon()))
+            batch_rewards.append(int(total_reward))
+            batch_times.append(time)   
+            epsilon -= 4.0e-4
+            
+            if epsilon >= 0.2:
+                agent.set_epsilon(epsilon)
+            if save_weights:
+                agent.save_weights(i_episode,'')  
+                                
+            if reward_threshold:
+                if len(batch_solved_reward) == 100:            
+                    if np.mean(batch_solved_reward) >= reward_threshold :              
+                        rewards = rewards + batch_rewards
+                        times = times = batch_times                    
 
-                    for time in batch_times:
-                        times.append(time)                    
-
-                    print('You solved task after {} episode'.format(len(rewards)))
-                    break
+                        print('Task solved after {} episodes'.format(i_episode))
+                        agent.save_weights(i_episode,'solved')  
+                        break
+                    else:
+                        del batch_solved_reward[0]
+                        batch_solved_reward.append(total_reward)
                 else:
-                    del batch_solved_reward[0]
                     batch_solved_reward.append(total_reward)
-            else:
-                batch_solved_reward.append(total_reward)
-            
-        if i_episode % plot_batch_threshold == 0 and i_episode != 0:
-            print('Batch')
-            plot(batch_rewards,"+",'Rewards of batch until episode {}'.format(i_episode),'Rewards',str(i_episode)+'_Batch')
-            plot(batch_times,".",'Times of batch until episode {}'.format(i_episode),'Times',str(i_episode)+'_Batch')
-            
-            rewards = rewards + batch_rewards
-            times = times = batch_times
                 
-            batch_rewards = []
-            batch_times = []
+            if i_episode % plot_batch_threshold == 0:
+                print('=====================')
+                print('|-------Batch-------|')
+                print('=====================')
+                plot(batch_rewards,"+",'Rewards of batch until episode {}'.format(i_episode),'Rewards',str(i_episode)+'_Batch')
+                plot(batch_times,".",'Times of batch until episode {}'.format(i_episode),'Times',str(i_episode)+'_Batch')
+                
+                rewards = rewards + batch_rewards
+                times = times = batch_times
+                    
+                batch_rewards = []
+                batch_times = []
 
-            print('Accumulative')
-            plot(rewards,"+",'Total rewards until episode {}'.format(i_episode),'Rewards',str(i_episode)+'_Total')
-            plot(times,".",'Total times until episode {}'.format(i_episode),'Times',str(i_episode)+'_Total')
-            
+                print('============================')
+                print('|-------Accumulative-------|')
+                print('============================')
+                plot(rewards,"+",'Total rewards until episode {}'.format(i_episode),'Rewards',str(i_episode)+'_Total')
+                plot(times,".",'Total times until episode {}'.format(i_episode),'Times',str(i_episode)+'_Total')
+        except KeyboardInterrupt:
+            print('Training loop interrupted, saving last models . . .')
+            agent.save_weights(i_episode,'forced')  
+    agent.save_weights(episode_max,'finalized')
+        
 if __name__ == '__main__':
     main()
