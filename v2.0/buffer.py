@@ -17,6 +17,11 @@ class Buffer:
         self.rewards = []
         self.dones = []     
         self.next_states = []
+
+        self.advantages = []
+        self.entropies = []
+        self.returns = []
+        self.losses = []     
         
     def save_eps(self, state, reward, action, done, next_state):
         self.rewards.append(reward)

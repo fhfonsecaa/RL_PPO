@@ -65,9 +65,9 @@ class WeightedSDRLoss(tf.tf.keras.losses.Loss):
         ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
         p1 = ratio*self.advantages
         p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*self.advantages
-        actor_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.minimum(p1,p2))
-        critic_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.square(self.rewards - self.values))
-        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.tf.keras.backend.mean(
+        actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
+        critic_loss = tf.keras.backend.mean(tf.keras.backend.square(self.rewards - self.values))
+        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
             -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
         )
         return total_loss
@@ -126,9 +126,9 @@ def ppo_loss(oldpolicy_probs, advantages, rewards, values):
         ratio = tf.math.exp(tf.math.log(newpolicy_dist+1e-10)-tf.math.log(oldpolicy_dist+1e-10))
         p1 = ratio*advantages
         p2 = tf.clip_by_value(ratio, clip_value_min=1-clipping_val, clip_value_max=1+clipping_val)*advantages
-        actor_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.minimum(p1,p2))
-        critic_loss = tf.tf.keras.backend.mean(tf.tf.keras.backend.square(rewards - values))
-        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.tf.keras.backend.mean(
+        actor_loss = tf.keras.backend.mean(tf.keras.backend.minimum(p1,p2))
+        critic_loss = tf.keras.backend.mean(tf.keras.backend.square(rewards - values))
+        total_loss = critic_discount*critic_loss + actor_loss - entropy_beta*tf.keras.backend.mean(
             -(newpolicy_dist*tf.math.log(newpolicy_dist + 1e-10))
         )
         return total_loss

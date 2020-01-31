@@ -18,29 +18,23 @@ from tensorflow.keras.models import Model
 import tensorflow_probability as tfp
 
 from agent import Agent
-from utility import ProbUtils
 from buffer import Buffer
 
 if os.path.exists('plots') is False:
     os.mkdir('plots')
 
-def plot(datas, marker, title, y_label, id):
+def plot(datas, marker, title, x_label, y_label, id):
     plt.plot(datas, marker)
     plt.title(title)
-    plt.xlabel('Episodes')
+    plt.xlabel(x_label)
     plt.ylabel(y_label)
     plt.grid()
     plt.show(block=False)
     plt.savefig('plots/'+id+'_'+y_label+'.png')
     plt.pause(3)
     plt.close()
-    
-    print('Max '+y_label+':', np.max(datas))
-    print('Min '+y_label+':', np.min(datas))
-    print('Avg '+y_label+':', np.mean(datas))
-    print('')
-
-def run_episode(env, agent, state_dim, render, training_mode, t_updates, n_update):
+ 
+def run_episode(env, agent, state_dim, render, training_mode, updates_counter, updates_threshold):
     state = env.reset()     
     done = False
     total_reward = 0
@@ -48,15 +42,12 @@ def run_episode(env, agent, state_dim, render, training_mode, t_updates, n_updat
 
     while not done:
         action = [agent.get_action(state).numpy()]
-        action_gym = 2 * np.array(action)
+        action_gym = np.array(action)
 
-        if np.random.uniform(0,1) > agent.epsilon:        
-            observations, reward, done, _ = env.step(action_gym)
-        else:
-            observations, reward, done, _ = env.step(env.action_space.sample())
+        observations, reward, done, _ = env.step(action_gym)
         
         eps_time += 1 
-        t_updates += 1
+        updates_counter += 1
         total_reward += reward
           
         if training_mode:
@@ -68,64 +59,29 @@ def run_episode(env, agent, state_dim, render, training_mode, t_updates, n_updat
             env.render()
         
         if training_mode:
-            if t_updates % n_update == 0:
+            if updates_counter % updates_threshold == 0:
                 agent.update_ppo()
-                t_updates = 0
+                updates_counter = 0
        
         if done:
-            return total_reward, eps_time, t_updates
-
-def run_episode_humanoid(env, agent, state_dim, render, training_mode, t_updates, n_update):
-    state = env.reset()     
-    done = False
-    total_reward = 0
-    eps_time = 0
-    n = 0
-
-    while n < 100:
-        action = [agent.act(state).numpy()]
-        action_gym = 2 * np.array(action)
-
-        if np.random.uniform(0,1) > agent.epsilon:        
-            next_state, reward, done, _ = env.step(action_gym)
-        else:
-            next_state, reward, done, _ = env.step(env.action_space.sample())
-        
-        eps_time += 1 
-        t_updates += 1
-        total_reward += reward
-          
-        if training_mode:
-            agent.save_eps(state, reward, action, done, next_state) 
-            
-        state = next_state     
-                
-        if render:
-            env.render()
-        
-        if training_mode:
-            if t_updates % n_update == 0:
-                agent.update_ppo()
-                t_updates = 0
-        n += 1
-
-    return total_reward, eps_time, t_updates
+            return total_reward, eps_time, updates_counter
     
 def main():
-
-    save_weights = False # If you want to save the agent, set this to True
+    mujoco = False
+    render = False
+    save_models = False # If you want to save the agent, set this to True
     training_mode = True # If you want to train the agent, set this to True. But set this otherwise if you only want to test it
     reward_threshold = None # Set threshold for reward. The learning will stop if reward has pass threshold. Set none to sei this off
-    mujoco = True
-    render = True # If you want to display the image.
-    update_threshold = 2048 # How many episode before you update the Policy
-    plot_batch_threshold = 100 # How many episode you want to plot the result
-    episode_max = 10000 # How many episodes to run
+    update_threshold = 2000 # Number of iterations before update the Policy
+    plot_batch_threshold = 1000 # How many episode you want to plot the result
+    episode_max = 150000 # How many episodes to run
 
     if mujoco:
         env_name = "Humanoid-v2"
+        epsilon_discount = 4.0e-5
     else:
         env_name = "MountainCarContinuous-v0"
+        epsilon_discount = 4.0e-4
 
     env = gym.make(env_name)
 
@@ -135,10 +91,11 @@ def main():
     
     state_dim = env.observation_space.shape
     action_dim = env.action_space.shape[0]
-    epsilon = 0.8
+    epsilon = 0.9
     agent = Agent(state_dim, action_dim, env, epsilon, mujoco)  
     
     rewards = []   
+    rewards_means = []   
     batch_rewards = []
     batch_solved_reward = []
     
@@ -150,15 +107,15 @@ def main():
     for i_episode in range(1, episode_max + 1):
         try:
             total_reward, time, updates_counter = run_episode(env, agent, state_dim, render, training_mode, updates_counter, update_threshold)
-            print('Episode {} \t t_reward: {} \t time: {} \t epsilon: {} \t'.format(i_episode, int(total_reward), time, agent.get_epsilon()))
+            print('Episode {} Elapsed time: {} Total reward: {}  Epsilon: {}'.format(i_episode, time, int(total_reward), agent.get_epsilon()))
             batch_rewards.append(int(total_reward))
             batch_times.append(time)   
-            epsilon -= 4.0e-4
+            epsilon -= epsilon_discount
             
-            if epsilon >= 0.2:
+            if epsilon >= 0.2 and training_mode:
                 agent.set_epsilon(epsilon)
-            if save_weights:
-                agent.save_weights(i_episode,'')  
+            if save_models:
+                agent.save_models(i_episode,'')  
                                 
             if reward_threshold:
                 if len(batch_solved_reward) == 100:            
@@ -167,7 +124,7 @@ def main():
                         times = times = batch_times                    
 
                         print('Task solved after {} episodes'.format(i_episode))
-                        agent.save_weights(i_episode,'solved')  
+                        agent.save_models(i_episode,'solved')  
                         break
                     else:
                         del batch_solved_reward[0]
@@ -179,11 +136,18 @@ def main():
                 print('=====================')
                 print('|-------Batch-------|')
                 print('=====================')
-                plot(batch_rewards,"+",'Rewards of batch until episode {}'.format(i_episode),'Rewards',str(i_episode)+'_Batch')
-                plot(batch_times,".",'Times of batch until episode {}'.format(i_episode),'Times',str(i_episode)+'_Batch')
+                plot(batch_rewards,"+",'Rewards of batch until episode {}'.format(i_episode), 'Episodes','Rewards',str(i_episode)+'_Batch')
+                plot(batch_times,".",'Times of batch until episode {}'.format(i_episode), 'Episodes','Times',str(i_episode)+'_Batch')
                 
+                rewards_mean = np.mean(batch_rewards)
+                print('Max Reward:', np.max(batch_rewards))
+                print('Min Reward:', np.min(batch_rewards))
+                print('Avg Reward:', rewards_mean)
+                print('')
+
                 rewards = rewards + batch_rewards
                 times = times = batch_times
+                rewards_means.append(rewards_mean)
                     
                 batch_rewards = []
                 batch_times = []
@@ -191,12 +155,16 @@ def main():
                 print('============================')
                 print('|-------Accumulative-------|')
                 print('============================')
-                plot(rewards,"+",'Total rewards until episode {}'.format(i_episode),'Rewards',str(i_episode)+'_Total')
-                plot(times,".",'Total times until episode {}'.format(i_episode),'Times',str(i_episode)+'_Total')
+                plot(rewards,"+",'Total rewards until episode {}'.format(i_episode), 'Episodes','Rewards',str(i_episode)+'_Total')
+                plot(times,".",'Total times until episode {}'.format(i_episode), 'Episodes','Times',str(i_episode)+'_Total')
         except KeyboardInterrupt:
             print('Training loop interrupted, saving last models . . .')
-            agent.save_weights(i_episode,'forced')  
-    agent.save_weights(episode_max,'finalized')
-        
+            agent.save_models(i_episode,'forced') 
+            plot(rewards_means,"ro-",'Average reward per batch until episode {}'.format(i_episode), 'Batchs','Rewards',str(i_episode)+'_BatchAverage')
+                
+            exit() 
+    agent.save_models(episode_max,'finalized')
+    plot(rewards_means,"ro-",'Average reward per batch until episode {}'.format(i_episode), 'Batchs','Rewards',str(i_episode)+'_BatchAverage')
+
 if __name__ == '__main__':
     main()

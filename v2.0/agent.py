@@ -16,10 +16,13 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 from tensorflow.keras.initializers import RandomUniform
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import TensorBoard
+
 
 from gym.envs.registration import register
 
-from utility import ProbUtils
+import utility as utils
+# from utility import ProbUtils
 from buffer import Buffer
 
 class Agent:
@@ -52,7 +55,6 @@ class Agent:
         self.cov_mat = tf.fill((action_dim,), self.action_std * self.action_std)
         self.optimizer = Adam(learning_rate = 3e-4)
         self.buffer = Buffer()
-        self.utils = ProbUtils()  
     
     def set_epsilon(self,epsilon):
         self.epsilon = epsilon  
@@ -61,32 +63,32 @@ class Agent:
         return self.epsilon  
 
     def init_actor_network(self):
-        model = tf.keras.Sequential()
-        model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        actor_model = tf.keras.Sequential()
+        actor_model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         if self.isMujoco:
-            model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-        model.add(Dense(64, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-        model.add(Dense(self.action_dim, activation = 'tanh', kernel_initializer=RandomUniform(seed=69)))
-        return model
+            actor_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            actor_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            actor_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        actor_model.add(Dense(64, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        actor_model.add(Dense(self.action_dim, activation = 'tanh', kernel_initializer=RandomUniform(seed=69)))
+        return actor_model
     
     def init_critic_network(self):
-        model = tf.keras.Sequential()
-        model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        critic_model = tf.keras.Sequential()
+        critic_model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         if self.isMujoco:
-            model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-        model.add(Dense(64, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-        model.add(Dense(1, activation = 'linear', kernel_initializer=RandomUniform(seed=69)))
-        return model
+            critic_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            critic_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            critic_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        critic_model.add(Dense(64, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        critic_model.add(Dense(1, activation = 'linear', kernel_initializer=RandomUniform(seed=69)))
+        return critic_model
 
     @tf.function
     def get_action(self, state):        
         state = tf.expand_dims(tf.cast(state, dtype = tf.float32), 0)        
         action_mean = self.actor_model(state)
-        action = self.utils.normal_sample(action_mean, self.cov_mat)
+        action = utils.normal_sample(action_mean, self.cov_mat)
         return tf.squeeze(action)   
 
     def save_eps(self, state, reward, action, done, next_state):
@@ -99,17 +101,17 @@ class Agent:
                 
         # Block the contribution of the old value in backpropagation
         old_values = tf.stop_gradient(old_values)
+
+        # Calculate entropy of the action probability 
+        dist_entropy = tf.math.reduce_mean(utils.entropy(action_mean, self.cov_mat))
+
+        # Calculate the ratio (pi_theta / pi_theta__old)        
+        logprobs = tf.expand_dims(utils.logprob(action_mean, self.cov_mat, actions), 1)         
+        old_logprobs = tf.stop_gradient(tf.expand_dims(utils.logprob(old_action_mean, self.cov_mat, actions), 1))
 		
         # Calculate external GAE
-        advantages = tf.stop_gradient(self.utils.generalized_advantage_estimation(values, rewards, next_values, dones))
-        returns = tf.stop_gradient(self.utils.temporal_difference(rewards, next_values, dones))
-        
-        # Calculate the ratio (pi_theta / pi_theta__old)        
-        logprobs = tf.expand_dims(self.utils.logprob(action_mean, self.cov_mat, actions), 1)         
-        old_logprobs = tf.stop_gradient(tf.expand_dims(self.utils.logprob(old_action_mean, self.cov_mat, actions), 1))
-        
-        # Calculate entropy of the action probability 
-        dist_entropy = tf.math.reduce_mean(self.utils.entropy(action_mean, self.cov_mat))
+        advantages = tf.stop_gradient(utils.generalized_advantage_estimation(values, rewards, next_values, dones))
+        returns = tf.stop_gradient(utils.temporal_difference(rewards, next_values, dones))
                         
         # Calculate external critic loss through clipped critic value
         vpredclipped = old_values + tf.clip_by_value(values - old_values, -self.value_clip, self.value_clip) # Minimize the difference between old value and new value
@@ -152,10 +154,22 @@ class Agent:
 
     def save_weights(self,episode,identifier):
         env_name = self.env.unwrapped.spec.id
+        time = utils.get_time_date()
         if os.path.exists(env_name) is False:
             os.mkdir(env_name)
+        print('Saving weights as -{}- {}'.format(identifier,time))
+        self.actor_model.save_weights(env_name+'/actor_weights_'+str(episode)+identifier+'.hd5')
+        self.actor_old_model.save_weights(env_name+'/actor_old_weights_'+str(episode)+identifier+'.hd5')
+        self.critic_model.save_weights(env_name+'/critic_weights_'+str(episode)+identifier+'.hd5')
+        self.critic_old_model.save_weights(env_name+'/critic_old_weights_'+str(episode)+identifier+'.hd5')
 
-        self.actor_model.save_weights(env_name+'/actor_'+str(episode)+identifier+'.hd5')
-        self.actor_old_model.save_weights(env_name+'/actor_old_'+str(episode)+identifier+'.hd5')
-        self.critic_model.save_weights(env_name+'/critic_'+str(episode)+identifier+'.hd5')
-        self.critic_old_model.save_weights(env_name+'/critic_old_'+str(episode)+identifier+'.hd5')
+    def save_models(self,episode,identifier):
+        env_name = self.env.unwrapped.spec.id
+        time = utils.get_time_date()
+        if os.path.exists(env_name) is False:
+            os.mkdir(env_name)
+        print('Saving models as -{}- {}'.format(identifier,time))
+        self.actor_model.save(env_name+'/actor_model_'+str(episode)+identifier+time+'.h5')
+        self.actor_old_model.save(env_name+'/actor_old_model_'+str(episode)+identifier+time+'.h5')
+        self.critic_model.save(env_name+'/critic_model_'+str(episode)+identifier+time+'.h5')
+        self.critic_old_model.save(env_name+'/critic_old_model_'+str(episode)+identifier+time+'.h5')
