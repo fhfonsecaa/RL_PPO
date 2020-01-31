@@ -65,24 +65,24 @@ def run_episode(env, agent, state_dim, render, training_mode, updates_counter, u
             return total_reward, eps_time, updates_counter
     
 def main():
-    mujoco = False
+    mujoco = True
     render = False
     save_models = False # Save the models 
     training_mode = True # Train the agent or test a memory model
     reward_threshold = None 
     # reward_threshold = 290 
 
-    # update_threshold = 800 # Iterations before update the Policy
-    # plot_batch_threshold = 500 # Espisodes included in the partial plot
-    # episode_max = 30000 
+    update_threshold = 800 # Iterations before update the Policy
+    plot_batch_threshold = 500 # Espisodes included in the partial plot
+    episode_max = 30000 
 
-    update_threshold = 1000 # Iterations before update the Policy
-    plot_batch_threshold = 100 # Episodes included in the partial plot
-    episode_max = 3000 
+    # update_threshold = 1000 # Iterations before update the Policy
+    # plot_batch_threshold = 100 # Episodes included in the partial plot
+    # episode_max = 3000 
 
     if mujoco:
         env_name = 'Humanoid-v2'
-        epsilon_discount = 4.0e-5
+        epsilon_discount = 5.0e-3
     else:
         env_name = 'MountainCarContinuous-v0'
         epsilon_discount = 4.0e-4
@@ -112,6 +112,9 @@ def main():
 
     updates_counter = 0
     
+    tb_writer = agent.get_summary_writer()
+    rewards_metric = tf.keras.metrics.Mean(name='rewards_metric')
+
     for epis in range(1, episode_max + 1):
         try:
             total_reward, time, updates_counter = run_episode(env, agent, state_dim, render, training_mode, updates_counter, update_threshold)
@@ -119,6 +122,11 @@ def main():
             batch_rewards.append(int(total_reward))
             batch_times.append(time)   
             epsilon -= epsilon_discount
+
+            rewards_metric(total_reward)
+            with tb_writer.as_default():
+                tf.summary.scalar('rewards', rewards_metric.result(), step=epis)
+            rewards_metric.reset_states()
             
             if epsilon >= 0.2 and training_mode:
                 agent.set_epsilon(epsilon)

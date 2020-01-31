@@ -22,7 +22,6 @@ from tensorflow.keras.callbacks import TensorBoard
 from gym.envs.registration import register
 
 import utility as utils
-# from utility import ProbUtils
 from buffer import Buffer
 
 class PPOAgent:
@@ -31,12 +30,7 @@ class PPOAgent:
         self.state_dim = state_dim
         self.env = env
         self.env_name = self.env.unwrapped.spec.id
-        self.EPSILON = 0.4
-        self.ALPHA = 0.95
-        self.GAMMA = 0.99
-        self.GAE_LAMBDA = 0.95
-        self.CLIPPING_LOSS_RATIO = 0.1
-        self.ENTROPY_LOSS_RATIO = 0.001
+        self.epsilon = 0.4
         self.isMujoco = mujoco
         
         self.actor_model = self.init_actor_network()
@@ -62,6 +56,7 @@ class PPOAgent:
         self.entropy_metric = tf.keras.metrics.Mean(name='entropy_metric')
         self.advantages_metric = tf.keras.metrics.Mean(name='advanteges_metric')
         self.returns_metric = tf.keras.metrics.Mean(name='returns_metric')
+        # self.rewards_metric = tf.keras.metrics.Mean(name='rewards_metric')
         
         # tensorboard --logdir logs/gradient_tape
         self.train_log_dir = 'logs/gradient_tape/'+ self.env_name + utils.get_time_date() + '/train'
@@ -72,6 +67,9 @@ class PPOAgent:
 
     def get_epsilon(self):
         return self.epsilon  
+
+    def get_summary_writer(self):
+        return self.train_summary_writer  
 
     def init_actor_network(self):
         actor_model = tf.keras.Sequential()
@@ -167,12 +165,15 @@ class PPOAgent:
         for epoch in range(self.ppo_epochs):       
             for states, actions, rewards, dones, next_states in self.buffer.get_all().batch(batch_size):
                 self.train_ppo(states, actions, rewards, dones, next_states)
+
+                # self.rewards_metric(rewards)
             with self.train_summary_writer.as_default():
                 tf.summary.scalar('actor_loss', self.actor_loss_metric.result(), step=epoch)
                 tf.summary.scalar('critic_loss', self.critic_loss_metric.result(), step=epoch)
                 tf.summary.scalar('entropy', self.entropy_metric.result(), step=epoch)
                 tf.summary.scalar('advantages', self.advantages_metric.result(), step=epoch)
                 tf.summary.scalar('returns', self.returns_metric.result(), step=epoch)
+                # tf.summary.scalar('rewards', self.rewards_metric.result(), step=epoch)
 
         self.buffer.clean_buffer()
 
@@ -181,7 +182,7 @@ class PPOAgent:
         self.entropy_metric.reset_states()
         self.advantages_metric.reset_states()
         self.returns_metric.reset_states()
-        self.rewards_metric.reset_states()
+        # self.rewards_metric.reset_states()
                 
         # Copy new weights into old policy:
         self.actor_old_model.set_weights(self.actor_model.get_weights())
