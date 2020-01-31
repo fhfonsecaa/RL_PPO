@@ -18,7 +18,6 @@ from tensorflow.keras.initializers import RandomUniform
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import TensorBoard
 
-
 from gym.envs.registration import register
 
 import utility as utils
@@ -30,7 +29,6 @@ class PPOAgent:
         self.state_dim = state_dim
         self.env = env
         self.env_name = self.env.unwrapped.spec.id
-        self.epsilon = 0.4
         self.isMujoco = mujoco
         
         self.actor_model = self.init_actor_network()
@@ -56,7 +54,6 @@ class PPOAgent:
         self.entropy_metric = tf.keras.metrics.Mean(name='entropy_metric')
         self.advantages_metric = tf.keras.metrics.Mean(name='advanteges_metric')
         self.returns_metric = tf.keras.metrics.Mean(name='returns_metric')
-        # self.rewards_metric = tf.keras.metrics.Mean(name='rewards_metric')
         
         # tensorboard --logdir logs/gradient_tape
         self.train_log_dir = 'logs/gradient_tape/'+ self.env_name + utils.get_time_date() + '/train'
@@ -166,14 +163,12 @@ class PPOAgent:
             for states, actions, rewards, dones, next_states in self.buffer.get_all().batch(batch_size):
                 self.train_ppo(states, actions, rewards, dones, next_states)
 
-                # self.rewards_metric(rewards)
             with self.train_summary_writer.as_default():
                 tf.summary.scalar('actor_loss', self.actor_loss_metric.result(), step=epoch)
                 tf.summary.scalar('critic_loss', self.critic_loss_metric.result(), step=epoch)
                 tf.summary.scalar('entropy', self.entropy_metric.result(), step=epoch)
                 tf.summary.scalar('advantages', self.advantages_metric.result(), step=epoch)
                 tf.summary.scalar('returns', self.returns_metric.result(), step=epoch)
-                # tf.summary.scalar('rewards', self.rewards_metric.result(), step=epoch)
 
         self.buffer.clean_buffer()
 
@@ -182,7 +177,6 @@ class PPOAgent:
         self.entropy_metric.reset_states()
         self.advantages_metric.reset_states()
         self.returns_metric.reset_states()
-        # self.rewards_metric.reset_states()
                 
         # Copy new weights into old policy:
         self.actor_old_model.set_weights(self.actor_model.get_weights())
@@ -199,12 +193,10 @@ class PPOAgent:
         self.critic_old_model.save(self.env_name+'/models/critic_old_model_'+str(episode)+identifier+time+'.h5')
 
     def load_models(self,path):
-        if os.path.exists(path+'actor_model.h5') is True and os.path.exists(path+'actor_model.h5') is True:
+        if os.path.exists(path+'/actor_model.h5') is True and os.path.exists(path+'/critic_model.h5') is True:
             print('Loading models . . . ')
-            # self.actor_model.save(self.env_name+'/models/actor_model_'+str(episode)+identifier+time+'.h5')
-            # self.actor_old_model.save(self.env_name+'/models/actor_old_model_'+str(episode)+identifier+time+'.h5')
-            # self.critic_model.save(self.env_name+'/models/critic_model_'+str(episode)+identifier+time+'.h5')
-            # self.critic_old_model.save(self.env_name+'/models/critic_old_model_'+str(episode)+identifier+time+'.h5')
+            self.actor_model = tf.keras.models.load_model(path+'/actor_model.h5')
+            self.critic_model = tf.keras.models.load_model(path+'/critic_model.h5')
         else:
             print('Models not found . . . ')
             exit()
