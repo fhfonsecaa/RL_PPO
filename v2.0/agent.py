@@ -25,7 +25,7 @@ import utility as utils
 # from utility import ProbUtils
 from buffer import Buffer
 
-class Agent:
+class PPOAgent:
     def __init__(self, state_dim, action_dim, env, epsilon, mujoco):
         self.action_dim = action_dim
         self.state_dim = state_dim
@@ -75,22 +75,26 @@ class Agent:
 
     def init_actor_network(self):
         actor_model = tf.keras.Sequential()
-        actor_model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         if self.isMujoco:
+            actor_model.add(Dense(512, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            actor_model.add(Dense(256, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            actor_model.add(Dense(256, activation='relu', kernel_initializer=RandomUniform(seed=69)))
             actor_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            actor_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            actor_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        else:
+            actor_model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         actor_model.add(Dense(64, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         actor_model.add(Dense(self.action_dim, activation = 'tanh', kernel_initializer=RandomUniform(seed=69)))
         return actor_model
     
     def init_critic_network(self):
         critic_model = tf.keras.Sequential()
-        critic_model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         if self.isMujoco:
+            critic_model.add(Dense(512, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            critic_model.add(Dense(256, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+            critic_model.add(Dense(256, activation='relu', kernel_initializer=RandomUniform(seed=69)))
             critic_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            critic_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
-            critic_model.add(Dense(128, activation='relu', kernel_initializer=RandomUniform(seed=69)))
+        else:
+            critic_model.add(Dense(128, input_shape=self.state_dim, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         critic_model.add(Dense(64, activation='relu', kernel_initializer=RandomUniform(seed=69)))
         critic_model.add(Dense(1, activation = 'linear', kernel_initializer=RandomUniform(seed=69)))
         return critic_model
@@ -177,21 +181,11 @@ class Agent:
         self.entropy_metric.reset_states()
         self.advantages_metric.reset_states()
         self.returns_metric.reset_states()
+        self.rewards_metric.reset_states()
                 
         # Copy new weights into old policy:
         self.actor_old_model.set_weights(self.actor_model.get_weights())
         self.critic_old_model.set_weights(self.critic_model.get_weights())
-
-    def save_weights(self,episode,identifier):
-        env_name = self.env.unwrapped.spec.id
-        time = utils.get_time_date()
-        if os.path.exists(env_name) is False:
-            os.mkdir(env_name)
-        print('Saving weights as -{}- {}'.format(identifier,time))
-        self.actor_model.save_weights(env_name+'/actor_weights_'+str(episode)+identifier+'.hd5')
-        self.actor_old_model.save_weights(env_name+'/actor_old_weights_'+str(episode)+identifier+'.hd5')
-        self.critic_model.save_weights(env_name+'/critic_weights_'+str(episode)+identifier+'.hd5')
-        self.critic_old_model.save_weights(env_name+'/critic_old_weights_'+str(episode)+identifier+'.hd5')
 
     def save_models(self,episode,identifier):
         time = utils.get_time_date()
@@ -202,3 +196,14 @@ class Agent:
         self.actor_old_model.save(self.env_name+'/models/actor_old_model_'+str(episode)+identifier+time+'.h5')
         self.critic_model.save(self.env_name+'/models/critic_model_'+str(episode)+identifier+time+'.h5')
         self.critic_old_model.save(self.env_name+'/models/critic_old_model_'+str(episode)+identifier+time+'.h5')
+
+    def load_models(self,path):
+        if os.path.exists(path+'actor_model.h5') is True and os.path.exists(path+'actor_model.h5') is True:
+            print('Loading models . . . ')
+            # self.actor_model.save(self.env_name+'/models/actor_model_'+str(episode)+identifier+time+'.h5')
+            # self.actor_old_model.save(self.env_name+'/models/actor_old_model_'+str(episode)+identifier+time+'.h5')
+            # self.critic_model.save(self.env_name+'/models/critic_model_'+str(episode)+identifier+time+'.h5')
+            # self.critic_old_model.save(self.env_name+'/models/critic_old_model_'+str(episode)+identifier+time+'.h5')
+        else:
+            print('Models not found . . . ')
+            exit()
