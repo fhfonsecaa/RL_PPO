@@ -30,6 +30,7 @@ class Agent:
         self.action_dim = action_dim
         self.state_dim = state_dim
         self.env = env
+        self.env_name = self.env.unwrapped.spec.id
         self.EPSILON = 0.4
         self.ALPHA = 0.95
         self.GAMMA = 0.99
@@ -55,6 +56,16 @@ class Agent:
         self.cov_mat = tf.fill((action_dim,), self.action_std * self.action_std)
         self.optimizer = Adam(learning_rate = 3e-4)
         self.buffer = Buffer()
+
+        self.actor_loss_metric = tf.keras.metrics.Mean(name='actor_loss_metric')
+        self.critic_loss_metric = tf.keras.metrics.Mean(name='critic_loss_metric')
+        self.entropy_metric = tf.keras.metrics.Mean(name='entropy_metric')
+        self.advantages_metric = tf.keras.metrics.Mean(name='advanteges_metric')
+        self.returns_metric = tf.keras.metrics.Mean(name='returns_metric')
+        
+        # tensorboard --logdir logs/gradient_tape
+        self.train_log_dir = 'logs/gradient_tape/'+ self.env_name + utils.get_time_date() + '/train'
+        self.train_summary_writer = tf.summary.create_file_writer(self.train_log_dir)
     
     def set_epsilon(self,epsilon):
         self.epsilon = epsilon  
@@ -126,27 +137,46 @@ class Agent:
         pg_loss = tf.math.reduce_mean(tf.math.minimum(surr1, surr2))         
                         
         loss = (critic_loss * self.vf_loss_coef) - (dist_entropy * self.entropy_coef) - pg_loss
-        return loss       
+        return loss, critic_loss, dist_entropy, advantages, returns
     
     # Get loss and perform backpropagation
     @tf.function
     def train_ppo(self, states, actions, rewards, dones, next_states):     
         with tf.GradientTape() as ppo_tape:
-            loss = self.get_ppo_loss(states, actions, rewards, dones, next_states)
+            loss, critic_loss, dist_entropy, advantages, returns = self.get_ppo_loss(states, actions, rewards, dones, next_states)
                     
         gradients = ppo_tape.gradient(loss, self.actor_model.trainable_variables + self.critic_model.trainable_variables)        
+
         self.optimizer.apply_gradients(zip(gradients, self.actor_model.trainable_variables + self.critic_model.trainable_variables)) 
-        
+    
+        self.actor_loss_metric(loss)
+        self.critic_loss_metric(critic_loss)
+        self.entropy_metric(dist_entropy)
+        self.advantages_metric(advantages)
+        self.returns_metric(returns)
+    
     # Update the model
     def update_ppo(self):        
         batch_size = int(self.buffer.length() / self.minibatch)
         
         # Optimize policy using K epochs:
-        for _ in range(self.ppo_epochs):       
+        for epoch in range(self.ppo_epochs):       
             for states, actions, rewards, dones, next_states in self.buffer.get_all().batch(batch_size):
                 self.train_ppo(states, actions, rewards, dones, next_states)
-                    
+            with self.train_summary_writer.as_default():
+                tf.summary.scalar('actor_loss', self.actor_loss_metric.result(), step=epoch)
+                tf.summary.scalar('critic_loss', self.critic_loss_metric.result(), step=epoch)
+                tf.summary.scalar('entropy', self.entropy_metric.result(), step=epoch)
+                tf.summary.scalar('advantages', self.advantages_metric.result(), step=epoch)
+                tf.summary.scalar('returns', self.returns_metric.result(), step=epoch)
+
         self.buffer.clean_buffer()
+
+        self.actor_loss_metric.reset_states()
+        self.critic_loss_metric.reset_states()
+        self.entropy_metric.reset_states()
+        self.advantages_metric.reset_states()
+        self.returns_metric.reset_states()
                 
         # Copy new weights into old policy:
         self.actor_old_model.set_weights(self.actor_model.get_weights())
@@ -164,12 +194,11 @@ class Agent:
         self.critic_old_model.save_weights(env_name+'/critic_old_weights_'+str(episode)+identifier+'.hd5')
 
     def save_models(self,episode,identifier):
-        env_name = self.env.unwrapped.spec.id
         time = utils.get_time_date()
-        if os.path.exists(env_name) is False:
-            os.mkdir(env_name)
+        if os.path.exists(self.env_name+'/models') is False:
+            os.mkdir(self.env_name+'/models')
         print('Saving models as -{}- {}'.format(identifier,time))
-        self.actor_model.save(env_name+'/actor_model_'+str(episode)+identifier+time+'.h5')
-        self.actor_old_model.save(env_name+'/actor_old_model_'+str(episode)+identifier+time+'.h5')
-        self.critic_model.save(env_name+'/critic_model_'+str(episode)+identifier+time+'.h5')
-        self.critic_old_model.save(env_name+'/critic_old_model_'+str(episode)+identifier+time+'.h5')
+        self.actor_model.save(self.env_name+'/models/actor_model_'+str(episode)+identifier+time+'.h5')
+        self.actor_old_model.save(self.env_name+'/models/actor_old_model_'+str(episode)+identifier+time+'.h5')
+        self.critic_model.save(self.env_name+'/models/critic_model_'+str(episode)+identifier+time+'.h5')
+        self.critic_old_model.save(self.env_name+'/models/critic_old_model_'+str(episode)+identifier+time+'.h5')
